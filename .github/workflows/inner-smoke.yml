@@ -22,6 +22,24 @@ jobs:
           cat /etc/os-release | head -3
           whoami
 
+      - name: System stats (cpu, memory, disk)
+        run: |
+          set -eu
+          echo "::group::CPU"
+          nproc --all
+          lscpu | grep -E "Model name|Architecture|CPU\(s\):|Thread|Vendor" || true
+          uptime
+          echo "::endgroup::"
+          echo "::group::Memory"
+          free -h
+          echo "::endgroup::"
+          echo "::group::Disk"
+          df -h
+          echo "::endgroup::"
+          echo "::group::Block devices"
+          lsblk 2>/dev/null || echo "lsblk unavailable"
+          echo "::endgroup::"
+
       - name: Runner runtime deps installed
         run: |
           set -eu
