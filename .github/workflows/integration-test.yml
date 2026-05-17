@@ -21,10 +21,16 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Install cirun-agent (latest release)
+        env:
+          # `gh` reads this automatically. Authenticated GH API calls
+          # avoid the 60/hr anon limit that install.sh's unauth curl
+          # burns through on shared GH-hosted runner egress IPs.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eux
-          curl --proto '=https' --tlsv1.2 -fsSL \
-            https://raw.githubusercontent.com/cirunlabs/cirun-agent/main/install.sh | bash
+          gh release download --repo cirunlabs/cirun-agent \
+            --pattern 'cirun-agent-installer.sh' --output installer.sh
+          bash installer.sh
           which cirun-agent
 
       - name: Start cirun-agent as systemd service
