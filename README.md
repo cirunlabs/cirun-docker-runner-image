@@ -73,10 +73,21 @@ avoids version skew between the image and the platform.
 docker build -t cirun-docker-runner:dev .
 ```
 
-## Variants
+## Tags
 
-`latest` and `24.04` track Ubuntu 24.04. The image is built for `linux/amd64`
-and `linux/arm64`.
+Two variants, both built for `linux/amd64` + `linux/arm64`:
+
+| Tag | Base image | When to use |
+|-----|------------|-------------|
+| `latest`, `24.04` | `ubuntu:24.04` | Standard runner |
+| `gpu`, `gpu-cuda13.2` | `nvidia/cuda:13.2.1-base-ubuntu24.04` | NVIDIA GPU jobs |
+
+The `gpu` variant adds CUDA 13.2.1 runtime libs on top of the same toolchain.
+It still needs `nvidia-container-toolkit` on the host and `--gpus all`
+(or cirun's `extra_config.gpu`) at run time to actually see a device.
+
+Branch / PR / semver tags also published (`main`, `main-gpu`, `v1.2.3`,
+`v1.2.3-gpu`, etc.).
 
 ## License
 
