@@ -24,7 +24,7 @@ jobs:
         run: |
           set -eux
           curl --proto '=https' --tlsv1.2 -fsSL \
-            https://raw.githubusercontent.com/cirunlabs/cirun-agent/main/install.sh | sh
+            https://raw.githubusercontent.com/cirunlabs/cirun-agent/main/install.sh | bash
           which cirun-agent
 
       - name: Start cirun-agent as systemd service
