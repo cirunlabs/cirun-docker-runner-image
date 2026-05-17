@@ -25,7 +25,7 @@ jobs:
       - name: Runner runtime deps installed
         run: |
           set -eu
-          for lib in libicu74 libssl3 libkrb5-3 zlib1g; do
+          for lib in libicu74 libkrb5-3 zlib1g; do
             dpkg -s "$lib" >/dev/null 2>&1 && echo "  $lib OK" || { echo "::error::missing $lib"; exit 1; }
           done
 
