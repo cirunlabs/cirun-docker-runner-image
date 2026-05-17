@@ -1,0 +1,21 @@
+# Runner declaration consumed by cirun when a workflow on
+# this repo uses one of the labels below. Lives in the same repo as
+# the image itself so the integration test (`integration-test.yml`)
+# is a closed loop: build the image → push to ghcr → spin up
+# cirun-agent in CI → dispatch `inner-smoke.yml` which targets this
+# runner → assert the fresh image actually boots a working runner.
+runners:
+  - name: cirun-docker-runner-image-ci
+    cloud: on_prem
+    # Small footprint — GitHub-hosted ubuntu-latest runners have ~14 GB
+    # free disk and 7 GB RAM. The CI test only checks runtime sanity
+    # inside the container, so request a thin slice.
+    instance_type: 2vcpu-2gb-8gb
+    # Pinned to :latest so the runner-image test always exercises the
+    # tag that cirun's docker executor configurations use in the wild.
+    machine_image: "ghcr.io/cirunlabs/cirun-docker-runner-image:latest"
+    region: RegionOne
+    extra_config:
+      executor: docker
+    labels:
+      - cirun-docker-runner-image-ci

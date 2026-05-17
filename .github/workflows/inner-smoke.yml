@@ -1,0 +1,57 @@
+name: inner-smoke
+
+# Targets `cirun-docker-runner-image-ci`, mapped by `.cirun.yml` onto a
+# docker executor running this repo's own `:latest` image. Triggered by
+# every push (in parallel with `integration-test`, which is the host
+# that runs cirun-agent and waits on this job).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on:
+      - cirun-docker-runner-image-ci--${{ github.run_id }}
+    timeout-minutes: 10
+    steps:
+      - name: Identity
+        run: |
+          set -eux
+          uname -a
+          cat /etc/os-release | head -3
+          whoami
+
+      - name: Runner runtime deps installed
+        run: |
+          set -eu
+          for lib in libicu74 libssl3 libkrb5-3 zlib1g; do
+            dpkg -s "$lib" >/dev/null 2>&1 && echo "  $lib OK" || { echo "::error::missing $lib"; exit 1; }
+          done
+
+      - name: CI tooling present
+        run: |
+          set -eux
+          git --version
+          curl --version | head -1
+          jq --version
+          gcc --version | head -1
+          python3 --version
+
+      - name: Docker access mode
+        run: |
+          set -eu
+          if [ -S /var/run/docker.sock ]; then
+            echo "docker-out-of-docker (host socket)"
+            docker info >/dev/null && echo "  daemon reachable"
+          elif docker info >/dev/null 2>&1; then
+            echo "docker-in-docker"
+            docker info | head -5
+          else
+            echo "runner-only (no docker)"
+          fi
+
+      - name: Pre-staged tool cache present
+        run: |
+          test -d /opt/hostedtoolcache || { echo "::error::/opt/hostedtoolcache missing"; exit 1; }
+          echo "/opt/hostedtoolcache OK"

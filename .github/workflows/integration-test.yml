@@ -1,0 +1,102 @@
+name: integration-test
+
+# Runs in parallel with `inner-smoke` on every push. This job installs
+# cirun-agent as a systemd service on ubuntu-latest so cirun can match
+# inner-smoke's runner-provision request to this host → docker run →
+# container from the just-pushed `:latest` image → inner-smoke runs
+# inside it. This job polls inner-smoke (same commit SHA) and fails
+# if it doesn't pass.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Install cirun-agent (latest release)
+        run: |
+          set -eux
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            https://raw.githubusercontent.com/cirunlabs/cirun-agent/main/install.sh | sh
+          which cirun-agent
+
+      - name: Start cirun-agent as systemd service
+        env:
+          CIRUN_API_TOKEN: ${{ secrets.CIRUN_API_TOKEN }}
+        run: |
+          set -eu
+          sudo -E "$(which cirun-agent)" --install-service
+          for i in $(seq 1 15); do
+            if systemctl is-active --quiet cirun-agent; then
+              echo "cirun-agent active after $i s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::cirun-agent did not reach active state"
+          sudo journalctl -u cirun-agent --no-pager | tail -50
+          exit 1
+
+      - name: Wait for agent registration
+        run: |
+          for i in $(seq 1 30); do
+            if sudo journalctl -u cirun-agent --no-pager 2>/dev/null | grep -q "Cirun API URL:"; then
+              sudo journalctl -u cirun-agent --no-pager | grep -E "Agent ID:|Hostname:|OS:|Cirun API URL:" | head -5
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::agent never logged 'Cirun API URL:'"
+          sudo journalctl -u cirun-agent --no-pager | tail -50
+          exit 1
+
+      - name: Resolve inner-smoke run for this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          for i in $(seq 1 20); do
+            sleep 3
+            RUN_ID=$(gh run list --repo "$GITHUB_REPOSITORY" \
+              --workflow inner-smoke.yml --commit "$GITHUB_SHA" \
+              --limit 1 --json databaseId --jq '.[0].databaseId')
+            if [ -n "${RUN_ID:-}" ] && [ "$RUN_ID" != "null" ]; then
+              echo "INNER_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+              echo "inner-smoke run $RUN_ID matches commit $GITHUB_SHA"
+              exit 0
+            fi
+          done
+          echo "::error::no inner-smoke run found for $GITHUB_SHA"
+          exit 1
+
+      - name: Wait for inner-smoke to complete
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          for i in $(seq 1 90); do
+            sleep 10
+            STATE=$(gh run view "$INNER_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+              --json status,conclusion --jq '{s:.status,c:.conclusion}')
+            STATUS=$(echo "$STATE" | jq -r .s)
+            CONCL=$(echo "$STATE" | jq -r .c)
+            echo "iter $i status=$STATUS conclusion=$CONCL"
+            if [ "$STATUS" = "completed" ]; then
+              [ "$CONCL" = "success" ] && exit 0
+              echo "::error::inner-smoke conclusion=$CONCL"
+              exit 1
+            fi
+          done
+          echo "::error::timeout (15 min) waiting for inner-smoke"
+          exit 1
+
+      - name: Dump cirun-agent journal
+        if: always()
+        run: sudo journalctl -u cirun-agent --no-pager | tail -120 || true
