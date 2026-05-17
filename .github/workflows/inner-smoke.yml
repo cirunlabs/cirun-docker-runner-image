@@ -55,3 +55,16 @@ jobs:
         run: |
           test -d /opt/hostedtoolcache || { echo "::error::/opt/hostedtoolcache missing"; exit 1; }
           echo "/opt/hostedtoolcache OK"
+
+      - name: docker hello-world (verifies privileged DinD)
+        run: |
+          set -eux
+          for i in $(seq 1 30); do
+            if docker info >/dev/null 2>&1; then
+              echo "dockerd up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          docker info | head -8
+          docker run --rm hello-world

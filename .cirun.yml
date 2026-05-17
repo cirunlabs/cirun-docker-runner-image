@@ -17,5 +17,9 @@ runners:
     region: RegionOne
     extra_config:
       executor: docker
+      # --privileged → image's entrypoint starts an internal dockerd
+      # so the inner-smoke step can `docker run hello-world` to prove
+      # DinD works end-to-end.
+      privileged: true
     labels:
       - cirun-docker-runner-image-ci
