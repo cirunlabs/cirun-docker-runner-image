@@ -9,8 +9,15 @@
 #   2. Container is --privileged                    → "docker-in-docker"
 #   3. Neither                                      → no docker; non-docker
 #                                                     jobs still run
+#
+# Two image variants share this Dockerfile via BASE_IMAGE:
+#   - base: ubuntu:24.04                              (tag: latest, 24.04)
+#   - gpu:  nvidia/cuda:13.2.1-base-ubuntu24.04       (tag: gpu, gpu-cuda13.2)
+# The GPU variant adds CUDA libs + nvidia-container-toolkit hooks via the
+# nvidia/cuda base; the rest of the layers are identical.
 
-FROM ubuntu:24.04
+ARG BASE_IMAGE=ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \

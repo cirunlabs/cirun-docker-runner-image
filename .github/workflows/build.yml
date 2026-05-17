@@ -13,8 +13,145 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  # ── Build + smoke-test each variant on a single arch (the runner's arch).
+  #    Validates the entrypoint's three modes and that the tools we install
+  #    actually work, before we spend QEMU cycles on multi-arch.
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: base
+            base_image: ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
+          - variant: gpu
+            base_image: nvidia/cuda:13.2.1-base-ubuntu24.04@sha256:7be56e69d8ae7c3648b8fca009fa35980ecd9c6eefaafbff3ee8c224e0043eb5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Build (load into local docker)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          load: true
+          tags: cirun-docker-runner-image:test-${{ matrix.variant }}
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,scope=${{ matrix.variant }},mode=max
+
+      - name: Smoke — tools installed
+        run: |
+          set -euo pipefail
+          IMG=cirun-docker-runner-image:test-${{ matrix.variant }}
+          docker run --rm "$IMG" bash -lc '
+            set -e
+            echo "=== runtime versions ==="
+            bash --version | head -1
+            git --version
+            curl --version | head -1
+            wget --version | head -1
+            jq --version
+            unzip -v | head -1
+            xz --version | head -1
+            gcc --version | head -1
+            g++ --version | head -1
+            make --version | head -1
+            python3 --version
+            pip3 --version
+            ssh -V 2>&1
+            docker --version
+            docker compose version
+            docker buildx version
+            iptables --version
+            echo "=== required runner deps present ==="
+            for lib in libicu74 libssl3 libkrb5-3 zlib1g; do
+              dpkg -s "$lib" >/dev/null && echo "  $lib OK"
+            done
+          '
+
+      - name: Smoke — docker-in-docker (privileged)
+        run: |
+          set -euo pipefail
+          IMG=cirun-docker-runner-image:test-${{ matrix.variant }}
+          docker run --rm --privileged "$IMG" bash -lc '
+            set -e
+            # Wait briefly in case the entrypoint logs landed before we exec.
+            for i in $(seq 1 30); do
+              docker info >/dev/null 2>&1 && break
+              sleep 1
+            done
+            docker version --format "client={{.Client.Version}} server={{.Server.Version}}"
+            docker run --rm hello-world | head -5
+          '
+
+      - name: Smoke — docker-out-of-docker (host socket)
+        run: |
+          set -euo pipefail
+          IMG=cirun-docker-runner-image:test-${{ matrix.variant }}
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            "$IMG" bash -lc '
+              docker version --format "client={{.Client.Version}} server={{.Server.Version}}"
+              docker run --rm hello-world | head -5
+            '
+
+      - name: Smoke — runner-only fallback (no docker access)
+        run: |
+          set -euo pipefail
+          IMG=cirun-docker-runner-image:test-${{ matrix.variant }}
+          # No --privileged, no socket. Entrypoint must warn and the job
+          # must still execute (exit 0). docker info inside must fail.
+          out=$(docker run --rm "$IMG" bash -lc '
+            echo "JOB_BODY_RAN"
+            docker info >/dev/null 2>&1 && echo "BAD: docker reachable" || echo "EXPECTED: docker unreachable"
+          ' 2>&1)
+          echo "$out"
+          echo "$out" | grep -q "JOB_BODY_RAN"
+          echo "$out" | grep -q "EXPECTED: docker unreachable"
+
+      - name: Smoke — CUDA libs present (gpu variant only)
+        if: matrix.variant == 'gpu'
+        run: |
+          set -euo pipefail
+          IMG=cirun-docker-runner-image:test-${{ matrix.variant }}
+          docker run --rm "$IMG" bash -lc '
+            set -e
+            echo "=== CUDA env ==="
+            env | grep -i cuda || true
+            ls /usr/local/cuda 2>/dev/null || ls /usr/local/cuda-* 2>/dev/null
+            dpkg -l | grep -E "cuda-cudart|cuda-keyring" | head -5
+          '
+
+  # ── Multi-arch build + push. Only runs on push/tag, after tests pass.
+  build-and-push:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: base
+            base_image: ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b
+            tag_lines: |
+              type=ref,event=branch
+              type=semver,pattern={{version}}
+              type=semver,pattern={{major}}.{{minor}}
+              type=raw,value=24.04,enable={{is_default_branch}}
+              type=raw,value=latest,enable={{is_default_branch}}
+          - variant: gpu
+            base_image: nvidia/cuda:13.2.1-base-ubuntu24.04@sha256:7be56e69d8ae7c3648b8fca009fa35980ecd9c6eefaafbff3ee8c224e0043eb5
+            tag_lines: |
+              type=ref,event=branch,suffix=-gpu
+              type=semver,pattern={{version}}-gpu
+              type=semver,pattern={{major}}.{{minor}}-gpu
+              type=raw,value=gpu,enable={{is_default_branch}}
+              type=raw,value=gpu-cuda13.2,enable={{is_default_branch}}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -26,7 +163,6 @@ jobs:
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
         with:
           registry: ghcr.io
@@ -38,21 +174,17 @@ jobs:
         uses: docker/metadata-action@030e881283bb7a6894de51c315a6bfe6a94e05cf # v6.0.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/cirun-docker-runner-image
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=24.04,enable={{is_default_branch}}
-            type=raw,value=latest,enable={{is_default_branch}}
+          tags: ${{ matrix.tag_lines }}
 
       - name: Build and push
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,scope=${{ matrix.variant }},mode=max
